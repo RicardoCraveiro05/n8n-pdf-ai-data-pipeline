@@ -1,0 +1,748 @@
+{
+  "updatedAt": "2026-09-30T16:27:49.368Z",
+  "createdAt": "2026-09-28T14:12:25.491Z",
+  "id": "d9wMSzKW8c93E8vc",
+  "name": "n8n PDF AI Data Pipeline",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -224,
+        0
+      ],
+      "id": "1a16dc5a-58df-42de-ad98-92f6a9b82878",
+      "name": "START — Document Processing"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_DRIVE_FILE_ID",
+          "mode": "list",
+          "cachedResultName": "sample_report.pdf",
+          "cachedResultUrl": "https://drive.google.com/file/d/YOUR_GOOGLE_DRIVE_FILE_ID/view?usp=drivesdk"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "e0b87896-573c-4bf8-bd76-b276d36acb34",
+      "name": "INGEST — PDF Document",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_N8N_CREDENTIAL_ID",
+          "name": "Google Drive account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n\n  const input = item.json;\n\n  // ============================================================\n  // 1. Get Anthropic response\n  // ============================================================\n\n  const rawText = input.content?.[0]?.text;\n\n  // ============================================================\n  // 2. Check response\n  // ============================================================\n\n  if (typeof rawText !== 'string' || !rawText.trim()) {\n\n    results.push({\n      json: {\n        valid: false,\n        validation_status: 'FAILED',\n        total_records: 0,\n        errors: [\n          'No usable Anthropic response was found.'\n        ]\n      }\n    });\n\n    continue;\n  }\n\n  // ============================================================\n  // 3. Parse JSON\n  // ============================================================\n\n  let data;\n\n  try {\n\n    data = JSON.parse(rawText.trim());\n\n  } catch (error) {\n\n    results.push({\n      json: {\n        valid: false,\n        validation_status: 'FAILED',\n        total_records: 0,\n        errors: [\n          'Anthropic response is not valid JSON.',\n          error.message\n        ],\n        raw_response: rawText\n      }\n    });\n\n    continue;\n  }\n\n  // ============================================================\n  // 4. Validate root structure\n  // ============================================================\n\n  const errors = [];\n\n  if (\n    typeof data !== 'object' ||\n    data === null ||\n    Array.isArray(data)\n  ) {\n\n    errors.push(\n      'AI response must be a JSON object.'\n    );\n\n  }\n\n  // ============================================================\n  // 5. Validate atendimentos\n  // ============================================================\n\n  if (!Array.isArray(data.atendimentos)) {\n\n    errors.push(\n      'The \"atendimentos\" field must be an array.'\n    );\n\n  }\n\n  // ============================================================\n  // 6. Validate records\n  // ============================================================\n\n  const requiredFields = [\n    'cnes',\n    'placa',\n    'tipologia',\n    'compet',\n    'uf',\n    'municipio',\n    'oci',\n    'quantidade'\n  ];\n\n  if (Array.isArray(data.atendimentos)) {\n\n    if (data.atendimentos.length === 0) {\n\n      errors.push(\n        'No attendance records were found.'\n      );\n\n    }\n\n    data.atendimentos.forEach((record, index) => {\n\n      // --------------------------------------------------------\n      // Record must be an object\n      // --------------------------------------------------------\n\n      if (\n        typeof record !== 'object' ||\n        record === null ||\n        Array.isArray(record)\n      ) {\n\n        errors.push(\n          `Attendance ${index} must be a JSON object.`\n        );\n\n        return;\n      }\n\n      // --------------------------------------------------------\n      // Required fields\n      // --------------------------------------------------------\n\n      for (const field of requiredFields) {\n\n        if (\n          !Object.prototype.hasOwnProperty.call(\n            record,\n            field\n          )\n        ) {\n\n          errors.push(\n            `Missing field: atendimentos[${index}].${field}`\n          );\n\n        }\n\n      }\n\n      // --------------------------------------------------------\n      // Empty strings\n      // null is allowed\n      // --------------------------------------------------------\n\n      for (const field of requiredFields) {\n\n        const value = record[field];\n\n        if (value === '') {\n\n          errors.push(\n            `Empty field: atendimentos[${index}].${field}`\n          );\n\n        }\n\n      }\n\n      // --------------------------------------------------------\n      // Validate quantity\n      // --------------------------------------------------------\n\n      const quantidade = record.quantidade;\n\n      if (\n        quantidade !== null &&\n        quantidade !== undefined\n      ) {\n\n        if (\n          typeof quantidade !== 'number' ||\n          !Number.isFinite(quantidade) ||\n          !Number.isInteger(quantidade) ||\n          quantidade < 0\n        ) {\n\n          errors.push(\n            `Invalid quantity at atendimentos[${index}]: ${quantidade}`\n          );\n\n        }\n\n      }\n\n      // --------------------------------------------------------\n      // Check unexpected fields\n      // --------------------------------------------------------\n\n      for (const field of Object.keys(record)) {\n\n        if (!requiredFields.includes(field)) {\n\n          errors.push(\n            `Unexpected field: atendimentos[${index}].${field}`\n          );\n\n        }\n\n      }\n\n    });\n\n  }\n\n  // ============================================================\n  // 7. Final result\n  // ============================================================\n\n  results.push({\n    json: {\n\n      valid: errors.length === 0,\n\n      validation_status:\n        errors.length === 0\n          ? 'PASSED'\n          : 'FAILED',\n\n      total_records:\n        Array.isArray(data.atendimentos)\n          ? data.atendimentos.length\n          : 0,\n\n      errors,\n\n      data\n\n    }\n  });\n\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        112
+      ],
+      "id": "79988d46-2fbd-4ea1-93b6-d69703d88187",
+      "name": "VALIDATE — Data Quality"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\n// ============================================================\n// Get validated attendance data\n// Obtém os dados de atendimento validados\n// ============================================================\n\nconst atendimentos = input.data?.atendimentos || [];\n\nconst results = [];\n\n// ============================================================\n// Create one n8n item per attendance\n// Cria um item do n8n para cada atendimento\n// ============================================================\n\natendimentos.forEach((record, index) => {\n\n  results.push({\n    json: {\n\n      // ========================================================\n      // Extracted fields\n      // Campos extraídos pela IA\n      // ========================================================\n\n      cnes:\n        record.cnes ?? null,\n\n      placa:\n        record.placa ?? null,\n\n      tipologia:\n        record.tipologia ?? null,\n\n      compet:\n        record.compet ?? null,\n\n      uf:\n        record.uf ?? null,\n\n      municipio:\n        record.municipio ?? null,\n\n      oci:\n        record.oci ?? null,\n\n      qtd:\n        record.quantidade ?? null,\n\n      // ========================================================\n      // Technical pipeline fields\n      // Campos técnicos do pipeline\n      // ========================================================\n\n      atendimento:\n        `ATD-${String(index + 1).padStart(4, '0')}`,\n\n      id_relatorio:\n        'YOUR_GOOGLE_DRIVE_FILE_ID',\n\n      file_name:\n        'sample_report.pdf',\n\n      data_processamento:\n        new Date().toISOString(),\n\n      valid:\n        input.valid === true\n\n    }\n  });\n\n});\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        0
+      ],
+      "id": "ceb24a32-f8a5-432c-85b7-b35f5e14f64e",
+      "name": "TRANSFORM — Normalize Records",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEETS_ID",
+          "mode": "list",
+          "cachedResultName": "TEST - N8N FLOW",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEETS_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEETS_ID/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "cnes",
+              "displayName": "cnes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "placa",
+              "displayName": "placa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "tipologia",
+              "displayName": "tipologia",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "compet",
+              "displayName": "compet",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "uf",
+              "displayName": "uf",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "municipio",
+              "displayName": "municipio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "oci",
+              "displayName": "oci",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "qtd",
+              "displayName": "qtd",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "atendimento",
+              "displayName": "atendimento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "id_relatorio",
+              "displayName": "id_relatorio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "competencia",
+              "displayName": "competencia",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "quantidade",
+              "displayName": "quantidade",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "numero_atendimento",
+              "displayName": "numero_atendimento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "file_id",
+              "displayName": "file_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "file_name",
+              "displayName": "file_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "data_processamento",
+              "displayName": "data_processamento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "valid",
+              "displayName": "valid",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1728,
+        0
+      ],
+      "id": "7f677a9f-7f4d-4e6a-94fb-79d2cbc91736",
+      "name": "LOAD — Google Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_N8N_CREDENTIAL_ID",
+          "name": "Google Sheets account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build validation error report\n// Cria o relatório de erro da validação\n\nconst input = $input.first().json;\n\n// ============================================================\n// Get original document information\n// Obtém informações do documento original\n// ============================================================\n\nconst source = $('INGEST — PDF Document').first().json;\n\nreturn [\n  {\n    json: {\n\n      // ========================================================\n      // Validation status\n      // Status da validação\n      // ========================================================\n\n      status: 'FAILED',\n\n      validation_status:\n        input.validation_status || 'FAILED',\n\n      // ========================================================\n      // Document information\n      // Informações do documento\n      // ========================================================\n\n      file_id:\n        source.id || null,\n\n      file_name:\n        source.name || null,\n\n      // ========================================================\n      // Validation information\n      // Informações da validação\n      // ========================================================\n\n      total_records:\n        input.total_records ?? 0,\n\n      errors:\n        Array.isArray(input.errors)\n          ? input.errors\n          : [\n              'Unknown validation error / ' +\n              'Erro de validação desconhecido'\n            ],\n\n      // ========================================================\n      // Processing timestamp\n      // Data e hora do processamento\n      // ========================================================\n\n      timestamp:\n        new Date().toISOString()\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        192
+      ],
+      "id": "975fb457-1688-45ad-8693-ded2bc01ccfd",
+      "name": "ERROR — Validation Failed"
+    },
+    {
+      "parameters": {
+        "sendTo": "your-email@example.com",
+        "subject": "Excel - Process CMD",
+        "emailType": "text",
+        "message": "=DOCUMENT PROCESSING PIPELINE ─────────────────────────────  Status: SUCCESS  Document processed successfully.  Records extracted: {{ $json.total_records }}  Validation: PASSED  Destination: Google Sheets  Processing timestamp: {{ $now }}  Pipeline: PDF → Gemini AI → Validation → Transformation → Google Sheets",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        0
+      ],
+      "id": "8cf31837-ca00-4b0e-aef5-7ac511e4d29f",
+      "name": "NOTIFY — Processing Completed",
+      "webhookId": "b9528ca7-2b86-4974-928a-e4888bda5e81",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_N8N_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "your-email@example.com",
+        "subject": "Error Notification",
+        "emailType": "text",
+        "message": "Validation Failed",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1744,
+        192
+      ],
+      "id": "b7b30570-eb51-49e6-894b-ba528a320d14",
+      "name": "NOTIFY — Validation Failed",
+      "webhookId": "7a191a5a-6900-41b2-bab0-ceee645a0073",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_N8N_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f1f1ed0e-ad49-4362-806d-904c825198ae",
+              "leftValue": true,
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1280,
+        112
+      ],
+      "id": "b9cb333d-a957-46eb-9e3e-3d99280b0389",
+      "name": "IF — Validation Passed"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEETS_ID",
+          "mode": "list",
+          "cachedResultName": "TEST - N8N FLOW",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEETS_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEETS_ID/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        0
+      ],
+      "id": "570aeef7-8ff1-4ff7-a30b-b1f2d4f21945",
+      "name": "DEDUP — Check Sheet",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_N8N_CREDENTIAL_ID",
+          "name": "Google Sheets account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ef8b822a-c989-451d-a4a2-87ded150842f",
+              "leftValue": "={{ $json.dedup_status }}",
+              "rightValue": "DUPLICATE",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        672,
+        0
+      ],
+      "id": "6bcf199f-1d12-40dd-8cc0-b5c307f6ee12",
+      "name": "IF — Duplicate?"
+    },
+    {
+      "parameters": {
+        "sendTo": "your-email@example.com",
+        "subject": "[DATA PIPELINE] Document Already Processed",
+        "emailType": "text",
+        "message": "=DOCUMENT PROCESSING PIPELINE ────────────────────────────  Status: DUPLICATE  The document was not processed because it has already been registered in the processing database.  Document: {{ $json.name }}  File ID: {{ $json.file_id }}  Deduplication Status: {{ $json.dedup_status }}  Action: Processing skipped to prevent duplicate records.  Timestamp: {{ $now }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        896,
+        -96
+      ],
+      "id": "02657c08-5bdb-49d7-b053-98798840a46d",
+      "name": "NOTIFY — Already Processed",
+      "webhookId": "5778580d-5092-40c3-9ce4-54ccb94e0950",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_N8N_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const fileId = 'YOUR_GOOGLE_DRIVE_FILE_ID';\n\nconst items = $input.all();\n\nconst exists = items.some(item => {\n  return item.json?.id_relatorio === fileId;\n});\n\nreturn [\n  {\n    json: {\n      id_relatorio: fileId,\n      duplicate: exists,\n      dedup_status: exists ? 'DUPLICATE' : 'NEW'\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "9acf04f6-51ea-41cd-8fb3-6e0696505e2b",
+      "name": "DEDUP — Is Duplicate"
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": {
+          "__rl": true,
+          "value": "claude-sonnet-5-5",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-5-5"
+        },
+        "text": "Leia o PDF inteiro.\n\nLocalize a tabela da seção \"2. Registros de Atendimento\".\n\nExtraia exclusivamente os dados dessa tabela.\n\nCada linha da tabela representa exatamente 1 atendimento.\n\nExtraia TODAS as linhas da tabela.\n\nNão agrupe linhas.\nNão some valores.\nNão faça cálculos.\nNão invente registros.\nNão utilize informações de outras seções para preencher os registros.\n\nPara cada linha, extraia exatamente estes campos:\n\n- cnes\n- placa\n- tipologia\n- compet\n- uf\n- municipio\n- oci\n- quantidade\n\nREGRAS DE EXTRAÇÃO:\n\n1. \"cnes\":\n   Extraia exatamente o valor apresentado no PDF.\n\n2. \"placa\":\n   Extraia exatamente o valor apresentado no PDF.\n\n3. \"tipologia\":\n   Extraia exatamente a tipologia apresentada no PDF.\n   Exemplos possíveis: \"Ambulância\", \"UTI Móvel\", \"Transporte Sanitário\".\n   Não invente ou deduza a tipologia a partir de outros campos.\n\n4. \"compet\":\n   Extraia exatamente a competência apresentada no PDF.\n   Preserve o formato apresentado no documento, por exemplo: \"2026-08\" ou \"2026-09\".\n   Não use a data atual e não calcule a competência.\n\n5. \"uf\":\n   Extraia exatamente a UF apresentada no PDF.\n\n6. \"municipio\":\n   Extraia exatamente o município apresentado no PDF.\n\n7. \"oci\":\n   Extraia exatamente o código OCI apresentado no PDF.\n\n8. \"quantidade\":\n   Extraia exatamente a quantidade apresentada no PDF.\n   Retorne como número inteiro, sem texto.\n\nSe algum campo não puder ser identificado com segurança, utilize null.\n\nCada linha da tabela deve gerar exatamente um objeto dentro de \"atendimentos\".\n\nRetorne EXATAMENTE neste formato:\n\n{\n  \"atendimentos\": [\n    {\n      \"cnes\": \"...\",\n      \"placa\": \"...\",\n      \"tipologia\": \"...\",\n      \"compet\": \"...\",\n      \"uf\": \"...\",\n      \"municipio\": \"...\",\n      \"oci\": \"...\",\n      \"quantidade\": 0\n    }\n  ]\n}\n\nIMPORTANTE:\n\n- Retorne todos os registros encontrados na tabela.\n- Não omita nenhuma linha.\n- Não duplique nenhuma linha.\n- Não agrupe registros.\n- Não altere os valores encontrados no PDF.\n- Não faça inferências.\n- Não preencha campos com informações que não estejam no PDF.\n- Não inclua explicações.\n- Não inclua comentários.\n- Não inclua Markdown.\n- Não escreva texto antes do JSON.\n- Não escreva texto depois do JSON.\n- Retorne somente o objeto JSON.\n- O JSON deve estar completamente fechado com ] e }.",
+        "inputType": "binary",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        896,
+        112
+      ],
+      "id": "01a40c72-9616-4913-ba98-f766184ac5af",
+      "name": "Analyze document1",
+      "credentials": {
+        "anthropicApi": {
+          "id": "YOUR_N8N_CREDENTIAL_ID",
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    }
+  ],
+  "connections": {
+    "START — Document Processing": {
+      "main": [
+        [
+          {
+            "node": "INGEST — PDF Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INGEST — PDF Document": {
+      "main": [
+        [
+          {
+            "node": "DEDUP — Check Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VALIDATE — Data Quality": {
+      "main": [
+        [
+          {
+            "node": "IF — Validation Passed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRANSFORM — Normalize Records": {
+      "main": [
+        [
+          {
+            "node": "LOAD — Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LOAD — Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "NOTIFY — Processing Completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ERROR — Validation Failed": {
+      "main": [
+        [
+          {
+            "node": "NOTIFY — Validation Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Validation Passed": {
+      "main": [
+        [
+          {
+            "node": "TRANSFORM — Normalize Records",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ERROR — Validation Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NOTIFY — Validation Failed": {
+      "main": [
+        []
+      ]
+    },
+    "DEDUP — Check Sheet": {
+      "main": [
+        [
+          {
+            "node": "DEDUP — Is Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "NOTIFY — Already Processed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Analyze document1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DEDUP — Is Duplicate": {
+      "main": [
+        [
+          {
+            "node": "IF — Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze document1": {
+      "main": [
+        [
+          {
+            "node": "VALIDATE — Data Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "45677154-9ef2-4e07-9208-7e3cc1df828f",
+  "activeVersionId": null,
+  "versionCounter": 221,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "parentFolder": null,
+  "activeVersion": null,
+  "homeProject": {
+    "id": "n0yumHpCSrFqrqH1",
+    "type": "personal",
+    "name": "NorthMetric   <northmetric.data@gmail.com>",
+    "icon": null
+  },
+  "sharedWithProjects": [],
+  "usedCredentials": [
+    {
+      "id": "YOUR_N8N_CREDENTIAL_ID",
+      "name": "Gmail account",
+      "type": "gmailOAuth2",
+      "currentUserHasAccess": true,
+      "homeProject": {
+        "id": "n0yumHpCSrFqrqH1",
+        "type": "personal",
+        "name": "NorthMetric   <northmetric.data@gmail.com>",
+        "icon": null
+      },
+      "sharedWithProjects": []
+    },
+    {
+      "id": "YOUR_N8N_CREDENTIAL_ID",
+      "name": "Google Drive account 3",
+      "type": "googleDriveOAuth2Api",
+      "currentUserHasAccess": true,
+      "homeProject": {
+        "id": "n0yumHpCSrFqrqH1",
+        "type": "personal",
+        "name": "NorthMetric   <northmetric.data@gmail.com>",
+        "icon": null
+      },
+      "sharedWithProjects": []
+    },
+    {
+      "id": "YOUR_N8N_CREDENTIAL_ID",
+      "name": "Google Sheets account 3",
+      "type": "googleSheetsOAuth2Api",
+      "currentUserHasAccess": true,
+      "homeProject": {
+        "id": "n0yumHpCSrFqrqH1",
+        "type": "personal",
+        "name": "NorthMetric   <northmetric.data@gmail.com>",
+        "icon": null
+      },
+      "sharedWithProjects": []
+    }
+  ],
+  "scopes": [
+    "execution:delete",
+    "execution:list",
+    "execution:read",
+    "execution:reveal",
+    "workflow:create",
+    "workflow:delete",
+    "workflow:disableRedaction",
+    "workflow:enableRedaction",
+    "workflow:execute",
+    "workflow:execute-chat",
+    "workflow:export",
+    "workflow:import",
+    "workflow:list",
+    "workflow:move",
+    "workflow:publish",
+    "workflow:read",
+    "workflow:share",
+    "workflow:unpublish",
+    "workflow:unshare",
+    "workflow:update"
+  ],
+  "checksum": "f235fe6b4ed1aacdce11bd3a9715c1d502761d59e18c11b73c04f79a2643c15f"
+}
