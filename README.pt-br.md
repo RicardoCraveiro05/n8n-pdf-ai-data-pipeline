@@ -1,68 +1,53 @@
-# Pipeline de Dados PDF + IA com n8n
+🇧🇷 **Português** | 🇺🇸 [English](README.md)
 
-<p align="center">
-  🇧🇷 <strong>Português</strong> &nbsp;|&nbsp;
-  🇺🇸 <a href="README.md">English</a>
-</p>
+# n8n PDF AI Data Pipeline
 
-## Visão geral
+Um **pipeline automatizado de extração de dados de PDF e ETL** construído com **n8n**, **Anthropic Claude**, **Google Drive** e **Google Sheets**. Ele lê um relatório em PDF, extrai com IA os registros de uma tabela-alvo, valida o resultado, verifica duplicidade e carrega dados limpos em uma planilha, com notificação por e-mail em cada desfecho.
 
-Um **pipeline automatizado de extração de dados de PDF e ETL**, desenvolvido com **n8n**, **Anthropic Claude**, **Google Drive** e **Google Sheets**.
+![Visão geral do fluxo](docs/workflow.png)
 
-O workflow lê um relatório em PDF, localiza a tabela desejada, extrai os registros estruturados com IA, valida o JSON retornado, transforma os registros para uma estrutura padronizada, verifica se o relatório já foi processado e carrega os dados validados no Google Sheets.
+> **Observação:** todos os documentos e valores deste repositório são **fictícios**, criados apenas para demonstrar o pipeline.
 
-O projeto demonstra uma aplicação prática de **processamento de documentos com IA, ETL, qualidade de dados, deduplicação e automação de workflows**.
+## O problema
 
-## Arquitetura
+Copiar manualmente os dados de relatórios em PDF para uma planilha é lento e sujeito a erros. Dois problemas pioram o cenário: o mesmo arquivo poder ser processado duas vezes e dados ruins chegarem à planilha sem ninguém perceber. Este pipeline automatiza a extração e adiciona travas para que o que chega na planilha seja confiável.
 
-```text
-Google Drive
-     │
-     ▼
-Documento PDF
-     │
-     ▼
-Verificação de duplicidade
-     │
-     ├── DUPLICATE ──► Notificação
-     │
-     └── NEW
-          │
-          ▼
-   Anthropic Claude
-          │
-          ▼
-    Validação dos dados
-          │
-          ├── FAILED ──► Notificação de erro
-          │
-          └── PASSED
-                │
-                ▼
-       Transformação dos registros
-                │
-                ▼
-          Google Sheets
-                │
-                ▼
-       Notificação de processamento
-```
+## Resultado
 
-## Tecnologias
+No caso real que originou o projeto, preencher a planilha manualmente a partir de um lote de 14 PDFs levava cerca de **3 horas**. Com o pipeline, o mesmo lote leva cerca de **15 minutos**.
 
-- **n8n** — orquestração do workflow
-- **Anthropic Claude** — extração de dados do PDF com IA
-- **Google Drive** — origem dos documentos
-- **Google Sheets** — destino dos dados
-- **JavaScript** — validação e transformação
-- **JSON** — contrato de dados estruturados
-- ETL
-- Validação de qualidade dos dados
-- Deduplicação
+| | Processo manual | Com o pipeline |
+|---|---|---|
+| Lote de 14 PDFs | ~3 horas | ~15 minutos |
+| Por documento | ~13 minutos | ~1 minuto |
+| Redução de tempo (processamento automatizado) | n/a | **~92%** |
+| Redução de tempo (incluindo revisão humana) | n/a | **~70%** |
 
-## Extração dos dados
+O pipeline foi pensado para funcionar com um humano no processo: o número de ~92% cobre o processamento automatizado, e o de ~70% é o ganho de ponta a ponta quando se conta a revisão humana dos resultados.
 
-A etapa de IA localiza a seção **"2. Registros de Atendimento"** do PDF e retorna:
+*Esses números vêm do caso de uso original. Este repositório usa apenas dados fictícios.*
+
+## Como funciona
+
+| Etapa | Nó | O que faz |
+|---|---|---|
+| **Ingestão** | `INGEST — PDF Document` | Baixa o PDF do Google Drive |
+| **Deduplicação** | `DEDUP — Check Sheet` → `DEDUP — Is Duplicate` → `IF — Duplicate?` | Procura o ID do arquivo no Drive na planilha de destino. Se já estiver lá, avisa por e-mail e encerra |
+| **Extração** | `AI — Document Extraction` | Envia o PDF ao Claude, que devolve as linhas da tabela em JSON estruturado |
+| **Validação** | `VALIDATE — Data Quality` → `IF — Validation Passed` | Uma etapa em JavaScript checa a saída da IA antes de gravar qualquer coisa |
+| **Transformação** | `TRANSFORM — Normalize Records` | Cria um registro normalizado por linha da tabela e anexa metadados técnicos |
+| **Carga** | `LOAD — Google Sheets` | Adiciona os registros na planilha de destino |
+| **Notificação** | `NOTIFY — ...` | Envia e-mail para cada desfecho: já processado, concluído ou falha na validação |
+
+### Três desfechos possíveis
+
+1. **Duplicado:** o documento já foi processado → e-mail "Already Processed", sem nenhuma chamada à IA.
+2. **Validação falhou:** a extração não passou nas checagens de qualidade → relatório de erro + e-mail "Validation Failed" listando os problemas. Nada é gravado na planilha.
+3. **Sucesso:** os registros são normalizados, adicionados ao Google Sheets e um único e-mail "Processing Completed" é enviado.
+
+## Contrato de dados
+
+A etapa de IA busca a tabela da seção **"2. Registros de Atendimento"** e deve devolver exatamente este JSON (os nomes dos campos estão em português porque os documentos de origem são em português):
 
 ```json
 {
@@ -81,146 +66,85 @@ A etapa de IA localiza a seção **"2. Registros de Atendimento"** do PDF e reto
 }
 ```
 
-Cada linha da tabela representa exatamente um registro de atendimento.
+Cada linha da tabela vira exatamente um objeto. O prompt orienta o modelo a extrair todas as linhas, nunca agrupar, somar ou inferir valores, usar `null` quando um campo não puder ser identificado com segurança e retornar somente JSON.
 
-O prompt de extração instrui o modelo a:
+## Validação
 
-- Extrair todas as linhas.
-- Não agrupar registros.
-- Não realizar cálculos.
-- Não fazer inferências.
-- Preservar os valores encontrados no PDF.
-- Retornar somente a estrutura JSON esperada.
+O nó `VALIDATE — Data Quality` checa a resposta da IA antes de ela seguir no pipeline:
 
-## Validação dos dados
+- a resposta é um JSON válido (cercas de Markdown são removidas se o modelo as adicionar)
+- a raiz é um objeto com um array `atendimentos` contendo ao menos um registro
+- todos os campos obrigatórios existem e nenhum é string vazia
+- `quantidade` é um inteiro não negativo
+- não há campos inesperados
+- nenhum registro está totalmente vazio
 
-O node `VALIDATE — Data Quality` verifica a resposta da IA antes que os dados continuem pelo pipeline.
-
-São verificados:
-
-- JSON válido.
-- Estrutura do objeto.
-- Existência do array `atendimentos`.
-- Campos obrigatórios.
-- Campos vazios.
-- Tipo e valor da quantidade.
-- Campos inesperados.
-- Existência de pelo menos um registro extraído.
-
-Isso cria uma camada de validação entre a extração realizada pela IA e o carregamento dos dados.
-
-## Transformação dos dados
-
-Após a validação, o workflow cria um item do n8n para cada registro de atendimento.
-
-A estrutura normalizada contém:
-
-```text
-cnes
-placa
-tipologia
-compet
-uf
-municipio
-oci
-qtd
-atendimento
-id_relatorio
-```
-
-Metadados técnicos também podem ser adicionados aos registros de processamento.
+Se qualquer checagem falhar, a execução vai para o caminho de erro em vez da carga.
 
 ## Deduplicação
 
-Antes de enviar o PDF para a etapa de extração com IA, o workflow verifica se o relatório já foi registrado.
+O ID do arquivo no Drive é gravado na coluna `id_relatorio` de cada linha carregada. Antes de chamar a IA, o fluxo lê a planilha e verifica se esse ID já está lá. Assim os duplicados são cortados cedo, e nenhuma chamada de IA é gasta com um documento já tratado.
 
-### Novo documento
+## Decisões de projeto
 
-```text
-NEW
- ↓
-Processar PDF
- ↓
-Extrair registros
- ↓
-Validar
- ↓
-Transformar
- ↓
-Carregar no Google Sheets
-```
+- **A deduplicação vem antes da IA.** Evita reprocessamento e custo desnecessário de IA.
+- **A saída da IA nunca é aceita às cegas.** Uma extração que parece plausível mas está errada é pior do que uma que falhou, então a validação fica entre a extração e a carga.
+- **Falhas são explícitas.** Todo ramo termina em uma notificação, então nada falha em silêncio.
+- **Etapas separadas** (extrair → validar → transformar → carregar), o que torna cada uma testável e fácil de substituir.
+- **Nomes de nós descritivos** (`ETAPA — ação`) deixam o fluxo legível de relance.
 
-### Documento já processado
+## Stack
 
-```text
-DUPLICATE
- ↓
-Ignorar processamento
- ↓
-Enviar notificação
-```
-
-Isso evita o processamento repetido do mesmo relatório.
-
-## Tratamento de erros
-
-Caso a resposta da IA não atenda ao contrato de dados esperado, o workflow direciona a execução para o caminho de erro da validação em vez de carregar registros inválidos.
-
-O workflow separa claramente:
-
-```text
-Extração
-    ↓
-Validação
-    ↓
-Transformação
-    ↓
-Carregamento
-```
+- [n8n](https://n8n.io/): orquestração
+- Anthropic Claude: extração de PDF assistida por IA (o fluxo está configurado com `claude-sonnet-5-5`; outros modelos Claude que aceitam PDF devem funcionar também)
+- Google Drive, Google Sheets, Gmail
+- JavaScript: nós Code para dedup, validação e transformação
 
 ## Estrutura do repositório
 
-```text
+```
 n8n-pdf-ai-data-pipeline/
-│
-├── workflow/
-│   └── pdf-ai-extraction.json
-│
-├── screenshots/
-│
 ├── README.md
 ├── README.pt-br.md
+├── docs/
+│   └── workflow.png
+├── workflow/
+│   └── pdf-ai-extraction.json
+├── samples/
+│   └── (PDF de exemplo fictício)
 └── .gitignore
 ```
 
 ## Configuração
 
-1. Importe `workflow/pdf-ai-extraction.json` no n8n.
-2. Configure as credenciais do Google Drive.
-3. Configure as credenciais do Google Sheets.
-4. Configure a credencial da Anthropic.
-5. Configure o Gmail caso as notificações por e-mail sejam utilizadas.
-6. Substitua os IDs e o endereço de e-mail de exemplo pelos seus valores.
-7. Revise as colunas do Google Sheets.
-8. Teste o workflow com um PDF de exemplo.
-9. Teste os cenários `NEW` e `DUPLICATE`.
-10. Ative o workflow somente após validar o processamento.
+1. Importe [`workflow/pdf-ai-extraction.json`](workflow/pdf-ai-extraction.json) no n8n.
+2. Crie e selecione suas próprias credenciais do Google Drive, Google Sheets, Gmail e Anthropic.
+3. Crie uma planilha no Google Sheets com uma aba chamada `Data` e esta linha de cabeçalho:
+   `cnes | placa | tipologia | compet | uf | municipio | oci | qtd | atendimento | id_relatorio | file_name | data_processamento | valid`
+4. Substitua os placeholders `YOUR_GOOGLE_DRIVE_FILE_ID` e `YOUR_GOOGLE_SHEETS_ID` (no nó do Drive e nos dois nós do Sheets) e `your-email@example.com` (nos três nós do Gmail).
+5. Envie o PDF de exemplo de [`samples/`](samples/) para o seu Drive.
+6. Teste os três cenários:
+   - **Documento novo:** rode uma vez e confira as linhas e o e-mail de sucesso.
+   - **Duplicado:** rode o mesmo arquivo de novo; deve parar com o e-mail "Already Processed".
+   - **Falha de validação:** rode com um PDF que não tenha a tabela esperada e confira o e-mail de falha.
 
-> O workflow incluído neste repositório é uma versão sanitizada para portfólio. Credenciais reais, documentos privados e identificadores pessoais de contas foram intencionalmente removidos.
+> Esta é uma versão sanitizada para portfólio. Credenciais, documentos reais e identificadores pessoais foram intencionalmente excluídos.
 
-## Contexto de portfólio
+## Limitações e roadmap
 
-Este projeto demonstra conhecimentos práticos em:
+- O gatilho é manual e processa um arquivo do Drive por vez. Um gatilho do Drive ou um loop de pasta automatizaria o lote inteiro.
+- [ ] Implementação equivalente no Activepieces
+- [ ] Versão do pipeline em Python
+- [ ] Comparativo entre as três abordagens
 
-- Data Analytics
-- Business Intelligence
-- ETL
-- Qualidade de dados
-- Processamento de dados com IA
-- Automação de workflows
-- Transformação de JSON
-- Construção de pipelines orientados ao negócio
+## Competências demonstradas
+
+ETL · processamento de documentos com IA · validação de qualidade de dados · deduplicação · automação de fluxos · contratos de dados em JSON
 
 ## Licença
 
-Este projeto está disponível para fins educacionais e de portfólio.
+Disponível para fins educacionais e de portfólio.
+
+## Autor
+
+**Ricardo**: BI e Automação · [GitHub](https://github.com/RicardoCraveiro05)
