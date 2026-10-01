@@ -1,68 +1,53 @@
+🇧🇷 [Português](README.pt-br.md) | 🇺🇸 **English**
+
 # n8n PDF AI Data Pipeline
 
-<p align="center">
-  🇧🇷 <a href="README.pt-br.md">Português</a> &nbsp;|&nbsp;
-  🇺🇸 <strong>English</strong>
-</p>
+An automated **PDF data extraction and ETL pipeline** built with **n8n**, **Anthropic Claude**, **Google Drive** and **Google Sheets**. It reads a PDF report, extracts the records of a target table with AI, validates the result, checks for duplicates, and loads clean data into a spreadsheet, with an email notification for every outcome.
 
-## Overview
+![Workflow overview](docs/workflow.png)
 
-An automated **PDF data extraction and ETL pipeline** built with **n8n**, **Anthropic Claude**, **Google Drive**, and **Google Sheets**.
+> **Note:** every document and value in this repository is **fictitious**, created only to demonstrate the pipeline.
 
-The workflow reads a PDF report, locates the target table, extracts structured records with AI, validates the returned JSON, transforms the records into a standardized structure, checks for duplicate reports, and loads validated data into Google Sheets.
+## The problem
 
-The project demonstrates a practical application of **AI-assisted document processing, ETL, data quality, deduplication, and workflow automation**.
+Copying the data of PDF reports into a spreadsheet by hand is slow and error-prone. Two things make it worse: the same file can be processed twice, and bad data can reach the spreadsheet unnoticed. This pipeline automates the extraction and adds guardrails so that what lands in the sheet can be trusted.
 
-## Architecture
+## Result
 
-```text
-Google Drive
-     │
-     ▼
-PDF Document
-     │
-     ▼
-Deduplication Check
-     │
-     ├── DUPLICATE ──► Notification
-     │
-     └── NEW
-          │
-          ▼
-   Anthropic Claude
-          │
-          ▼
-   Data Validation
-          │
-          ├── FAILED ──► Error Notification
-          │
-          └── PASSED
-                │
-                ▼
-        Record Transformation
-                │
-                ▼
-        Google Sheets
-                │
-                ▼
-       Processing Notification
-```
+In the original real-world use case, filling the spreadsheet by hand from a batch of 14 PDFs took about **3 hours**. With this pipeline, the same batch takes about **15 minutes**.
 
-## Technologies
+| | Manual process | With the pipeline |
+|---|---|---|
+| Batch of 14 PDFs | ~3 hours | ~15 minutes |
+| Per document | ~13 minutes | ~1 minute |
+| Time reduction (automated processing) | n/a | **~92%** |
+| Time reduction (including human review) | n/a | **~70%** |
 
-- **n8n** — workflow orchestration
-- **Anthropic Claude** — AI-assisted PDF extraction
-- **Google Drive** — document source
-- **Google Sheets** — destination
-- **JavaScript** — validation and transformation
-- **JSON** — structured data contract
-- ETL
-- Data quality validation
-- Deduplication
+The pipeline is designed to work with a human in the loop: the ~92% figure covers the automated processing, and the ~70% figure is the end-to-end gain once the human review of the results is counted.
 
-## Data Extraction
+*These figures come from the original use case. This repository uses fictitious data only.*
 
-The AI extraction step targets the PDF section **"2. Registros de Atendimento"** and returns:
+## How it works
+
+| Stage | Node | What it does |
+|---|---|---|
+| **Ingest** | `INGEST — PDF Document` | Downloads the PDF from Google Drive |
+| **Dedup** | `DEDUP — Check Sheet` → `DEDUP — Is Duplicate` → `IF — Duplicate?` | Looks for the file's Drive ID in the destination sheet. If it is already there, notifies by email and stops |
+| **Extract** | `AI — Document Extraction` | Sends the PDF to Claude, which returns the table rows as structured JSON |
+| **Validate** | `VALIDATE — Data Quality` → `IF — Validation Passed` | A JavaScript step checks the AI output before anything is written |
+| **Transform** | `TRANSFORM — Normalize Records` | Creates one normalized record per table row and attaches technical metadata |
+| **Load** | `LOAD — Google Sheets` | Appends the records to the destination sheet |
+| **Notify** | `NOTIFY — ...` | Sends an email for each outcome: already processed, completed, or validation failed |
+
+### Three possible outcomes
+
+1. **Duplicate:** the document was already processed → "Already Processed" email, and no AI call is made.
+2. **Validation failed:** the extraction did not meet the quality checks → error report + "Validation Failed" email listing the problems. Nothing is written to the sheet.
+3. **Success:** records are normalized, appended to Google Sheets, and a single "Processing Completed" email is sent.
+
+## Data contract
+
+The AI step targets the table of the section **"2. Registros de Atendimento"** and must return exactly this JSON (field names are in Portuguese because the source documents are in Portuguese):
 
 ```json
 {
@@ -81,146 +66,85 @@ The AI extraction step targets the PDF section **"2. Registros de Atendimento"**
 }
 ```
 
-Each table row represents exactly one attendance record.
+Each table row becomes exactly one object. The prompt tells the model to extract every row, never group, sum or infer values, use `null` when a field cannot be identified with confidence, and return only JSON.
 
-The extraction prompt explicitly instructs the model to:
+## Validation
 
-- Extract all rows.
-- Avoid grouping records.
-- Avoid calculations.
-- Avoid inference.
-- Preserve values found in the PDF.
-- Return only the expected JSON structure.
+`VALIDATE — Data Quality` checks the AI response before it continues through the pipeline:
 
-## Data Validation
+- the response is valid JSON (Markdown fences are stripped if the model adds them)
+- the root is an object with an `atendimentos` array containing at least one record
+- every required field is present, and none is an empty string
+- `quantidade` is a non-negative integer
+- there are no unexpected fields
+- no record is entirely empty
 
-The `VALIDATE — Data Quality` node verifies the AI response before the data continues through the pipeline.
-
-It checks:
-
-- Valid JSON.
-- Object structure.
-- Presence of the `atendimentos` array.
-- Required fields.
-- Empty strings.
-- Quantity type and value.
-- Unexpected fields.
-- At least one extracted record.
-
-This creates a validation layer between AI extraction and data loading.
-
-## Data Transformation
-
-After validation, the workflow creates one n8n item per attendance record.
-
-The normalized output contains:
-
-```text
-cnes
-placa
-tipologia
-compet
-uf
-municipio
-oci
-qtd
-atendimento
-id_relatorio
-```
-
-Technical metadata can also be attached to the processing records.
+If any check fails, the execution is routed to the error path instead of the load step.
 
 ## Deduplication
 
-Before sending the PDF to the AI extraction stage, the workflow checks whether the report has already been registered.
+The Drive file ID is stored in the `id_relatorio` column of every loaded row. Before calling the AI, the workflow reads the sheet and checks whether that ID is already there. This cuts duplicates early, so no AI call is spent on a document that was already handled.
 
-### New document
+## Design decisions
 
-```text
-NEW
- ↓
-Process PDF
- ↓
-Extract records
- ↓
-Validate
- ↓
-Transform
- ↓
-Load to Google Sheets
+- **Dedup runs before the AI step.** It avoids repeated processing and unnecessary AI cost.
+- **AI output is never trusted blindly.** A plausible-looking but wrong extraction is worse than a failed one, so validation sits between extraction and loading.
+- **Failures are explicit.** Every branch ends in a notification, so nothing fails silently.
+- **Stages are separated** (extract → validate → transform → load), which makes each one testable and easy to replace.
+- **Descriptive node names** (`STAGE — action`) keep the flow readable at a glance.
+
+## Tech stack
+
+- [n8n](https://n8n.io/): workflow orchestration
+- Anthropic Claude: AI-assisted PDF extraction (the workflow is set to `claude-sonnet-5-5`; other Claude models that accept PDF input should also work)
+- Google Drive, Google Sheets, Gmail
+- JavaScript: Code nodes for dedup, validation and transformation
+
+## Repository structure
+
 ```
-
-### Previously processed document
-
-```text
-DUPLICATE
- ↓
-Skip processing
- ↓
-Send notification
-```
-
-This prevents repeated processing of the same report.
-
-## Error Handling
-
-If the AI response does not satisfy the expected data contract, the workflow routes the execution to the validation error path instead of loading invalid records.
-
-The workflow therefore separates:
-
-```text
-Extraction
-    ↓
-Validation
-    ↓
-Transformation
-    ↓
-Loading
-```
-
-## Repository Structure
-
-```text
 n8n-pdf-ai-data-pipeline/
-│
-├── workflow/
-│   └── pdf-ai-extraction.json
-│
-├── screenshots/
-│
 ├── README.md
 ├── README.pt-br.md
+├── docs/
+│   └── workflow.png
+├── workflow/
+│   └── pdf-ai-extraction.json
+├── samples/
+│   └── (fictitious sample PDF)
 └── .gitignore
 ```
 
 ## Setup
 
-1. Import `workflow/pdf-ai-extraction.json` into n8n.
-2. Configure Google Drive credentials.
-3. Configure Google Sheets credentials.
-4. Configure the Anthropic credential.
-5. Configure Gmail if email notifications are required.
-6. Replace the placeholder IDs and email address with your own values.
-7. Review the Google Sheets columns.
-8. Test the workflow with a sample PDF.
-9. Test both `NEW` and `DUPLICATE` scenarios.
-10. Activate the workflow after validation.
+1. Import [`workflow/pdf-ai-extraction.json`](workflow/pdf-ai-extraction.json) into n8n.
+2. Create and select your own credentials for Google Drive, Google Sheets, Gmail and Anthropic.
+3. Create a Google Sheet with a tab named `Data` and this header row:
+   `cnes | placa | tipologia | compet | uf | municipio | oci | qtd | atendimento | id_relatorio | file_name | data_processamento | valid`
+4. Replace the placeholders `YOUR_GOOGLE_DRIVE_FILE_ID` and `YOUR_GOOGLE_SHEETS_ID` (in the Drive node and in both Sheets nodes) and `your-email@example.com` (in the three Gmail nodes).
+5. Upload the sample PDF from [`samples/`](samples/) to your Drive.
+6. Test the three scenarios:
+   - **New document:** run it once and check the rows and the success email.
+   - **Duplicate:** run the same file again; it must stop with the "Already Processed" email.
+   - **Validation failure:** run it with a PDF that does not contain the expected table, and check the failure email.
 
-> The workflow included in this repository is a sanitized portfolio version. Real credentials, private documents, and personal account identifiers are intentionally excluded.
+> This is a sanitized portfolio version. Credentials, real documents and personal identifiers are intentionally excluded.
 
-## Portfolio Context
+## Limitations and roadmap
 
-This project demonstrates practical skills in:
+- The trigger is manual and processes one Drive file at a time. A Drive trigger or a folder loop would automate the whole batch.
+- [ ] Equivalent implementation in Activepieces
+- [ ] Python version of the pipeline
+- [ ] Comparison of the three approaches
 
-- Data Analytics
-- Business Intelligence
-- ETL
-- Data Quality
-- AI-assisted data processing
-- Workflow Automation
-- JSON transformation
-- Business-oriented data pipelines
+## Skills demonstrated
+
+ETL · AI-assisted document processing · data quality validation · deduplication · workflow automation · JSON data contracts
 
 ## License
 
-This project is available for educational and portfolio purposes.
+Available for educational and portfolio purposes.
+
+## Author
+
+**Ricardo**: BI & Automation · [GitHub](https://github.com/RicardoCraveiro05)
