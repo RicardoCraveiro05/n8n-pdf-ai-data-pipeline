@@ -4,7 +4,7 @@
 
 An automated **PDF data extraction and ETL pipeline** built with **n8n**, **Anthropic Claude**, **Google Drive** and **Google Sheets**. It reads a PDF report, extracts the records of a target table with AI, validates the result, checks for duplicates, and loads clean data into a spreadsheet, with an email notification for every outcome.
 
-![Workflow overview](docs/workflow.jpeg)
+![Workflow overview](main/Workflow - N8N.jpeg)
 
 > **Note:** every document and value in this repository is **fictitious**, created only to demonstrate the pipeline.
 
