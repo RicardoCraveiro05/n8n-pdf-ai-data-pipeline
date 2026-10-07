@@ -4,7 +4,7 @@
 
 Um **pipeline automatizado de extração de dados de PDF e ETL** construído com **n8n**, **Anthropic Claude**, **Google Drive** e **Google Sheets**. Ele lê um relatório em PDF, extrai com IA os registros de uma tabela-alvo, valida o resultado, verifica duplicidade e carrega dados limpos em uma planilha, com notificação por e-mail em cada desfecho.
 
-![Visão geral do fluxo](docs/workflow.jpeg)
+![Visão geral do fluxo](workflow.jpeg)
 
 > **Observação:** todos os documentos e valores deste repositório são **fictícios**, criados apenas para demonstrar o pipeline.
 
